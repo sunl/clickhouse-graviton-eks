@@ -248,7 +248,9 @@ FROM system.replicas WHERE table = 't';
 
 ### 7.1 持久化存储
 
-新建的 EKS 集群默认不带 EBS CSI 插件,也不带 Pod Identity Agent。没有 EBS CSI 时 PVC 会一直 Pending。集群自带的 `gp2` StorageClass 写的是旧的 in-tree provisioner(`kubernetes.io/aws-ebs`),同样要靠 EBS CSI 插件才能建卷。
+ClickHouse 和 Keeper 的数据卷都用 EBS gp3,通过一个单独创建的 `gp3` StorageClass 提供。清单里每个数据卷都显式写了 `storageClassName: gp3`,不依赖集群的默认 StorageClass,所以不需要改动集群的默认设置。
+
+要让 gp3 卷能建出来,集群需要两个插件:EBS CSI 和 Pod Identity Agent。新建的 EKS 集群默认两个都不带,没有 EBS CSI 时 PVC 会一直 Pending。
 
 **步骤:**
 
@@ -300,7 +302,10 @@ kubectl apply -f manifests/gp3-storageclass.yaml
 
 - 两个插件的 pod 在 5 台 arm64 节点上全部正常运行。
 - 3 个 Keeper 卷、4 个 ClickHouse 卷全部绑定,`/var/lib/clickhouse` 挂在 EBS 卷上。
+- 在 EC2 侧核对过,这些卷的类型都是 gp3,用的是 gp3 的默认性能(3000 IOPS、125 MB/s)。需要更高性能时,在 StorageClass 的 `parameters` 里设置 `iops` 和 `throughput`;这两个参数本次没有测试。
 - 删除一个 ClickHouse 副本 pod,新 pod 挂回原来的卷,该副本的 5,001,171 行数据原样还在。
+
+**关于集群自带的 `gp2` StorageClass:** EKS 集群默认带一个名为 `gp2` 的 StorageClass,`kubectl get sc` 会把它和 `gp3` 一起列出来。本文没有用它,ClickHouse 的卷都不在它上面。它写的是旧的 in-tree provisioner(`kubernetes.io/aws-ebs`),同样要靠 EBS CSI 插件才能建卷。
 
 不要把 ClickHouse 数据放在 EFS 上。IO 特别重的场景可以考虑带本地 NVMe 的 Graviton 机型(如 i8g、im4gn),但本地盘在节点替换时数据会丢,需要靠副本恢复;这类机型本次没有测试。
 
