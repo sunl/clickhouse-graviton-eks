@@ -1,13 +1,14 @@
-# 已验证结构,未按原规格运行:在 eks-test 上用 operator 0.27.4 实际部署通过,
-# 但部署时把规格缩小了(ClickHouse 250m CPU / 3Gi 内存 / 20Gi 卷,Keeper 250m / 512Mi),
-# 跑在 4 台 m8g.large 加 1 台 c8g.8xlarge 上。拓扑、反亲和、容忍、gp3 卷这些配置与本文件完全一致。
+# 已验证结构,未按原规格运行:在 eks-test(K8s 1.37)上用 operator 0.27.4 实际部署通过,
+# 但部署时把规格缩小了(ClickHouse 1 vCPU / 3Gi 内存 / 20Gi 卷,Keeper 250m / 512Mi),
+# 跑在 4 台 m8g.large 上。拓扑、节点选择、反亲和、容忍、gp3 卷这些配置与本文件完全一致。
 # 本文件里的 28 vCPU / 48Gi / 500Gi 是按 c8g.8xlarge 写的示例值,没有按这个尺寸跑过,请按实际机型调整。
 #
 # 前置条件(见 README 第 7 节):
 #   1. 集群已安装 EBS CSI 插件,并存在名为 gp3 的 StorageClass(manifests/gp3-storageclass.yaml)。
 #   2. operator 必须监听本文件所在的命名空间。Helm chart 默认只监听 operator 自己所在的命名空间,
 #      需要设置 watchNamespaces,否则 apply 之后不会有任何反应。
-#   3. 节点组带污点 dedicated=clickhouse:NoSchedule;没有污点时 tolerations 不起作用,但也无害。
+#   3. 节点组带污点 dedicated=clickhouse:NoSchedule 和标签 workload=clickhouse-ha-test。
+#      nodeSelector 里的 workload 标签要改成你自己节点组的标签,否则 pod 会一直 Pending。
 #   4. 先 apply Keeper(本文件第一段),等 STATUS = Completed 后再 apply ClickHouse(第二段)。
 #   5. 反亲和要求每个 ClickHouse pod 独占一台节点:2 分片 × 2 副本至少需要 4 台 arm64 节点,Keeper 至少 3 台。
 apiVersion: clickhouse-keeper.altinity.com/v1
@@ -31,6 +32,7 @@ spec:
         spec:
           nodeSelector:
             kubernetes.io/arch: arm64
+            workload: clickhouse-ha-test    # 专用节点组的标签,保证 pod 只落在这组节点上
           tolerations:
             - key: dedicated
               operator: Equal
@@ -85,6 +87,7 @@ spec:
         spec:
           nodeSelector:
             kubernetes.io/arch: arm64
+            workload: clickhouse-ha-test    # 专用节点组的标签,保证 pod 只落在这组节点上
           tolerations:
             - key: dedicated
               operator: Equal
