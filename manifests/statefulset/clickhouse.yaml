@@ -1,0 +1,232 @@
+# 不用 operator 的部署方式:ClickHouse,2 分片 × 2 副本,一个普通的 StatefulSet(4 个 pod)加 ConfigMap。
+# pod 序号和分片的对应关系:clickhouse-0、clickhouse-1 是分片 1,clickhouse-2、clickhouse-3 是分片 2。
+# 部署前需要:keeper.yaml 已就绪;Secret clickhouse-app-user 和 clickhouse-cluster-secret 已创建;
+# users.xml 里 app 账号的来源网段已改成自己的 VPC 网段(见 README 第 7 节)。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  namespace: clickhouse
+data:
+  cluster.xml: |
+    <clickhouse>
+      <listen_host>0.0.0.0</listen_host>
+      <!-- 副本之间互相拉取数据时使用的地址 -->
+      <interserver_http_host from_env="CH_FQDN"/>
+
+      <zookeeper>
+        <node>
+          <host>clickhouse-keeper-0.clickhouse-keeper-headless.clickhouse.svc.cluster.local</host>
+          <port>2181</port>
+        </node>
+        <node>
+          <host>clickhouse-keeper-1.clickhouse-keeper-headless.clickhouse.svc.cluster.local</host>
+          <port>2181</port>
+        </node>
+        <node>
+          <host>clickhouse-keeper-2.clickhouse-keeper-headless.clickhouse.svc.cluster.local</host>
+          <port>2181</port>
+        </node>
+      </zookeeper>
+
+      <!-- 建表语句里的 {shard} 和 {replica},由启动命令根据 pod 序号算出来 -->
+      <macros>
+        <cluster>main</cluster>
+        <shard from_env="CH_SHARD"/>
+        <replica from_env="CH_REPLICA"/>
+      </macros>
+
+      <remote_servers>
+        <main>
+          <!-- 节点之间互相访问时用这个密钥认证,不需要在这里写账号密码 -->
+          <secret from_env="CLUSTER_SECRET"/>
+          <shard>
+            <internal_replication>true</internal_replication>
+            <replica>
+              <host>clickhouse-0.clickhouse-headless.clickhouse.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+            <replica>
+              <host>clickhouse-1.clickhouse-headless.clickhouse.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+          <shard>
+            <internal_replication>true</internal_replication>
+            <replica>
+              <host>clickhouse-2.clickhouse-headless.clickhouse.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+            <replica>
+              <host>clickhouse-3.clickhouse-headless.clickhouse.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+        </main>
+      </remote_servers>
+    </clickhouse>
+  users.xml: |
+    <clickhouse>
+      <users>
+        <!-- default 账号只允许在 pod 本机使用(kubectl exec 进去做管理操作) -->
+        <default>
+          <networks replace="replace">
+            <ip>127.0.0.1</ip>
+            <ip>::1</ip>
+          </networks>
+        </default>
+        <!-- 应用使用的账号。密码取自 Secret,来源网段改成你的 VPC 网段 -->
+        <app>
+          <password from_env="APP_PASSWORD"/>
+          <networks>
+            <ip>10.0.0.0/20</ip>
+          </networks>
+          <profile>default</profile>
+          <quota>default</quota>
+        </app>
+      </users>
+    </clickhouse>
+---
+# 给副本之间互相访问用:每个 pod 一个固定的域名
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-headless
+  namespace: clickhouse
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: clickhouse
+  ports:
+    - name: native
+      port: 9000
+    - name: http
+      port: 8123
+    - name: interserver
+      port: 9009
+---
+# 给应用用:连接会被分发到各个就绪的副本上
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: clickhouse
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse
+  ports:
+    - name: native
+      port: 9000
+    - name: http
+      port: 8123
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: clickhouse
+spec:
+  serviceName: clickhouse-headless
+  replicas: 4
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        workload: clickhouse        # 专用节点组的标签
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: clickhouse
+          effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: clickhouse
+      securityContext:
+        runAsUser: 101              # 镜像里的 clickhouse 用户
+        runAsGroup: 101
+        fsGroup: 101
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:26.10
+          command:
+            - bash
+            - -c
+            - |
+              ordinal=${HOSTNAME##*-}
+              export CH_SHARD=$(( ordinal / 2 + 1 ))      # 每个分片 2 个副本
+              export CH_REPLICA=$HOSTNAME
+              export CH_FQDN=$HOSTNAME.clickhouse-headless.clickhouse.svc.cluster.local
+              exec clickhouse-server --config-file=/etc/clickhouse-server/config.xml
+          env:
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse-app-user
+                  key: password
+            - name: CLUSTER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse-cluster-secret
+                  key: secret
+          ports:
+            - name: native
+              containerPort: 9000
+            - name: http
+              containerPort: 8123
+            - name: interserver
+              containerPort: 9009
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "28"
+              memory: 48Gi
+            limits:
+              memory: 56Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: config
+              mountPath: /etc/clickhouse-server/config.d/cluster.xml
+              subPath: cluster.xml
+            - name: config
+              mountPath: /etc/clickhouse-server/users.d/users.xml
+              subPath: users.xml
+      volumes:
+        - name: config
+          configMap:
+            name: clickhouse-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        storageClassName: gp3
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 500Gi

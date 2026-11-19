@@ -1,6 +1,6 @@
 # ClickHouse 集群,2 分片 × 2 副本,每个 pod 独占一台 c8g.8xlarge(32 vCPU / 64 GB),数据在 gp3 卷上。
 # 部署前需要:prod-keeper.yaml 已就绪;Secret clickhouse-app-user 已创建;
-# app/networks/ip 已改成自己的 VPC 网段(见 README 第 7 节)。
+# app/networks/ip 已改成自己的 VPC 网段(见 README 6.3 节)。
 apiVersion: clickhouse.altinity.com/v1
 kind: ClickHouseInstallation
 metadata:

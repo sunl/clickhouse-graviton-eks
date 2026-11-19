@@ -1,0 +1,39 @@
+# 模拟一个业务应用:用 app 账号通过 Service 连接 ClickHouse(不用 operator 的部署方式)。
+# 容器 native 走原生协议(9000),容器 http 走 HTTP 接口(8123)。密码从 Secret 注入,不出现在命令行里。
+# 跑完后删除:kubectl -n clickhouse delete pod ch-client-test
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ch-client-test
+  namespace: clickhouse
+spec:
+  restartPolicy: Never
+  containers:
+    - name: native
+      image: clickhouse/clickhouse-server:26.10
+      env:
+        - name: APP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: clickhouse-app-user
+              key: password
+      command:
+        - bash
+        - -c
+        - >-
+          clickhouse-client --host clickhouse --port 9000 --user app --password "$APP_PASSWORD"
+          -q "SELECT currentUser(), version(), count() FROM clusterAllReplicas(main, system.one)"
+    - name: http
+      image: curlimages/curl:8.23.0
+      env:
+        - name: APP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: clickhouse-app-user
+              key: password
+      command:
+        - sh
+        - -c
+        - >-
+          curl -sS --fail -u "app:$APP_PASSWORD" "http://clickhouse:8123/"
+          --data-binary "SELECT currentUser(), hostName()"
