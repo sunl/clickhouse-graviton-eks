@@ -1,0 +1,70 @@
+# ClickHouse 集群,2 分片 × 2 副本,每个 pod 独占一台 c8g.8xlarge(32 vCPU / 64 GB),数据在 gp3 卷上。
+# 部署前需要:prod-keeper.yaml 已就绪;Secret clickhouse-app-user 已创建;
+# app/networks/ip 已改成自己的 VPC 网段(见 README 第 7 节)。
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: prod
+  namespace: clickhouse
+spec:
+  defaults:
+    templates:
+      podTemplate: arm
+      dataVolumeClaimTemplate: data
+  configuration:
+    zookeeper:
+      nodes:
+        - host: keeper-prod-keeper
+          port: 2181
+    users:
+      # 应用使用的账号。密码取自 Secret,允许访问的来源网段改成你的 VPC 网段。
+      app/password:
+        valueFrom:
+          secretKeyRef:
+            name: clickhouse-app-user
+            key: password
+      app/networks/ip:
+        - 10.0.0.0/20
+      app/profile: default
+      app/quota: default
+    clusters:
+      - name: main
+        layout:
+          shardsCount: 2
+          replicasCount: 2
+  templates:
+    podTemplates:
+      - name: arm
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: arm64
+            workload: clickhouse    # 专用节点组的标签
+          tolerations:
+            - key: dedicated
+              operator: Equal
+              value: clickhouse
+              effect: NoSchedule
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      clickhouse.altinity.com/chi: prod
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:26.10
+              resources:
+                requests:
+                  cpu: "28"
+                  memory: 48Gi
+                limits:
+                  memory: 56Gi
+    volumeClaimTemplates:
+      - name: data
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 500Gi

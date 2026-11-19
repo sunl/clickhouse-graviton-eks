@@ -1,0 +1,22 @@
+# cert-manager 的 Helm values:所有组件都调度到 ClickHouse 专用节点组上。
+crds:
+  enabled: true
+
+nodeSelector: &sel
+  kubernetes.io/arch: arm64
+  workload: clickhouse
+tolerations: &tol
+  - key: dedicated
+    operator: Equal
+    value: clickhouse
+    effect: NoSchedule
+
+webhook:
+  nodeSelector: *sel
+  tolerations: *tol
+cainjector:
+  nodeSelector: *sel
+  tolerations: *tol
+startupapicheck:
+  nodeSelector: *sel
+  tolerations: *tol

@@ -1,0 +1,10 @@
+# ClickHouse 官方 operator 的 Helm values:operator 调度到 ClickHouse 专用节点组上。
+manager:
+  nodeSelector:
+    kubernetes.io/arch: arm64
+    workload: clickhouse
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: clickhouse
+      effect: NoSchedule

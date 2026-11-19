@@ -1,0 +1,51 @@
+# ClickHouse Keeper,3 副本,每个副本一台节点,数据在 gp3 卷上。
+# 先部署这个文件,等 STATUS = Completed 后再部署 prod-clickhouse.yaml。
+apiVersion: clickhouse-keeper.altinity.com/v1
+kind: ClickHouseKeeperInstallation
+metadata:
+  name: prod-keeper
+  namespace: clickhouse
+spec:
+  defaults:
+    templates:
+      podTemplate: arm
+      dataVolumeClaimTemplate: keeper-data
+  configuration:
+    clusters:
+      - name: keeper
+        layout:
+          replicasCount: 3          # Keeper 需要奇数个副本才能容忍单点故障
+  templates:
+    podTemplates:
+      - name: arm
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: arm64
+            workload: clickhouse    # 专用节点组的标签
+          tolerations:
+            - key: dedicated
+              operator: Equal
+              value: clickhouse
+              effect: NoSchedule
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      clickhouse-keeper.altinity.com/chk: prod-keeper
+          containers:
+            - name: clickhouse-keeper
+              image: clickhouse/clickhouse-keeper:26.10
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 2Gi
+    volumeClaimTemplates:
+      - name: keeper-data
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 20Gi

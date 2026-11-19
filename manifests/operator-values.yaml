@@ -1,0 +1,24 @@
+# Altinity clickhouse-operator 的 Helm values。
+# operator 和安装 CRD 的 Job 都调度到 ClickHouse 专用节点组上,并监听 clickhouse 命名空间。
+nodeSelector:
+  kubernetes.io/arch: arm64
+  workload: clickhouse
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: clickhouse
+    effect: NoSchedule
+
+crdHook:
+  nodeSelector:
+    kubernetes.io/arch: arm64
+    workload: clickhouse
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: clickhouse
+      effect: NoSchedule
+
+# operator 默认只监听自己所在的命名空间,这里显式指定 ClickHouse 所在的命名空间
+watchNamespaces:
+  - clickhouse
