@@ -1,0 +1,38 @@
+# 已验证:在 eks-test(us-east-1,K8s 1.32)的 c8g.8xlarge 节点上实际部署通过。
+# 数据放在容器本地盘,pod 重建即丢失,仅用于安装和功能验证。
+# 第 2 步:Keeper 就绪后再部署。
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: graviton
+  namespace: clickhouse-test
+spec:
+  defaults:
+    templates:
+      podTemplate: arm
+  configuration:
+    zookeeper:
+      nodes:
+        - host: keeper-graviton-keeper
+          port: 2181
+    clusters:
+      - name: test
+        layout:
+          shardsCount: 1
+          replicasCount: 2
+  templates:
+    podTemplates:
+      - name: arm
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: arm64
+            workload: clickhouse-test
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.8
+              resources:
+                requests:
+                  cpu: "8"
+                  memory: 16Gi
+                limits:
+                  memory: 24Gi

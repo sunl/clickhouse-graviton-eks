@@ -1,0 +1,58 @@
+# 已验证:在 eks-test 上用 ClickHouse 官方 operator v0.0.8(Helm chart 0.0.8)实际部署通过,
+# 全部 pod 跑在 Graviton(c8g.8xlarge)上,2 个副本之间复制正常,数据在 gp3 卷上。
+# 注意:
+#   - 官方 operator 的 API 还是 v1alpha1,仅建议用于 PoC。
+#   - 没有设置 spec.settings.defaultUserPassword,default 用户无密码,生产必须设置。
+#   - Keeper 和 ClickHouse 一起 apply 时,ClickHouse 会因为连不上 Keeper 重启一两次后恢复。
+apiVersion: clickhouse.com/v1alpha1
+kind: KeeperCluster
+metadata:
+  name: official-keeper
+  namespace: clickhouse-official
+spec:
+  replicas: 1
+  podTemplate:
+    nodeSelector:
+      kubernetes.io/arch: arm64
+      workload: clickhouse-test
+  containerTemplate:
+    image:
+      repository: clickhouse/clickhouse-keeper
+      tag: "25.8"
+  dataVolumeClaimSpec:
+    storageClassName: gp3
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 5Gi
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: official
+  namespace: clickhouse-official
+spec:
+  replicas: 2
+  shards: 1
+  keeperClusterRef:
+    name: official-keeper
+  podTemplate:
+    nodeSelector:
+      kubernetes.io/arch: arm64
+      workload: clickhouse-test
+  containerTemplate:
+    image:
+      repository: clickhouse/clickhouse-server
+      tag: "25.8"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        memory: 4Gi
+  dataVolumeClaimSpec:
+    storageClassName: gp3
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 10Gi

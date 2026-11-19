@@ -1,0 +1,46 @@
+# 已验证:在 eks-test 上实际部署,用于验证同一分片内 arm64 副本和 x86 副本可以互相复制。
+# 副本 0 跑在 Graviton(c8g.8xlarge),副本 1 跑在 x86(t3.medium)。数据在容器本地盘,仅用于验证。
+# 迁移场景下的用法:给现有 x86 分片加一个 arm64 副本,数据同步完成后再下线 x86 副本。
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: mixed
+  namespace: clickhouse-test
+spec:
+  configuration:
+    zookeeper:
+      nodes:
+        - host: keeper-graviton-keeper
+          port: 2181
+    clusters:
+      - name: mixed
+        layout:
+          shards:
+            - replicas:
+                - templates:
+                    podTemplate: arm
+                - templates:
+                    podTemplate: amd
+  templates:
+    podTemplates:
+      - name: arm
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: arm64
+            workload: clickhouse-test
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.8
+              resources:
+                requests: {cpu: "1", memory: 2Gi}
+                limits: {memory: 4Gi}
+      - name: amd
+        spec:
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.8
+              resources:
+                requests: {cpu: 250m, memory: 1Gi}
+                limits: {memory: 1536Mi}

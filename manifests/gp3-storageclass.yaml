@@ -1,0 +1,11 @@
+# 已验证:在 eks-test 上创建,ClickHouse 和 Keeper 的 PVC 均通过它成功绑定 gp3 卷。
+# 前置条件:集群已安装 aws-ebs-csi-driver 插件。
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  type: gp3
