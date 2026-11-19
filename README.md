@@ -22,7 +22,7 @@ ClickHouse 可以在 EKS 1.37 的 Graviton 节点上部署和运行,以下几项
 | 节点 | 1 × c8g.8xlarge(32 vCPU / 64 GB);4 × m8g.large(带污点,用于高可用验证);全部是 AL2023 arm64,kubelet v1.37.1 |
 | 可用区 | 3 个(us-east-1a / 1b / 1c),私有子网经 NAT 出公网 |
 | Operator | Altinity clickhouse-operator 0.27.4;ClickHouse 官方 operator v0.0.8 |
-| ClickHouse / Keeper | `clickhouse/clickhouse-server:25.8`、`clickhouse/clickhouse-keeper:25.8`(实际版本 25.8.33.6) |
+| ClickHouse / Keeper | `clickhouse/clickhouse-server:26.10`、`clickhouse/clickhouse-keeper:26.10`(实际版本 26.10.6.18) |
 | 存储 | EBS CSI 插件 v1.68.0-eksbuild.1,gp3 |
 | 其他插件 | eks-pod-identity-agent v1.4.1-eksbuild.3 |
 | 客户端工具 | kubectl v1.37.2,helm v3.19.0 |
@@ -42,7 +42,7 @@ ClickHouse 官方 arm64 镜像要求 ARMv8.2-A 加 RCpc 扩展,官方文档写�
 | 镜像 | 版本 |
 |---|---|
 | `altinity/clickhouse-operator`、`altinity/metrics-exporter` | 0.27.4 |
-| `clickhouse/clickhouse-server`、`clickhouse/clickhouse-keeper` | 25.8 |
+| `clickhouse/clickhouse-server`、`clickhouse/clickhouse-keeper` | 26.10 |
 | `ghcr.io/clickhouse/clickhouse-operator` | v0.0.8 |
 | cert-manager(官方 operator 的依赖) | v1.21.3 |
 | EBS CSI 插件 | v1.68.0-eksbuild.1 |
@@ -171,7 +171,7 @@ kubectl apply -f manifests/02-clickhouse.yaml
 kubectl -n clickhouse-test get chi graviton -w             # 等到 STATUS = Completed
 ```
 
-实测 Keeper 38 秒就绪,ClickHouse 74 秒就绪,命名空间里没有告警事件。
+实测 Keeper 44 秒就绪,ClickHouse 79 秒就绪,pod 没有重启。
 
 按这个顺序部署,ClickHouse pod 的启动日志里 Keeper 相关的报错是 0。如果两者一起 apply,ClickHouse 会比 Keeper 先起来,日志里报 `Host not found: keeper-graviton-keeper`,等 Keeper 就绪后才自动恢复。
 
@@ -201,7 +201,7 @@ kubectl -n clickhouse-test exec chi-graviton-test-0-0-0 -c clickhouse -- \
   clickhouse-client -q "SELECT version(), (SELECT value FROM system.build_options WHERE name='SYSTEM_PROCESSOR')"
 ```
 
-测试输出:`25.8.33.6  aarch64`。ClickHouse 识别到 32 线程、61.65 GiB 内存。
+测试输出:`26.10.6.18  aarch64`。ClickHouse 识别到 32 线程、61.65 GiB 内存。
 
 ### 6.2 确认集群拓扑
 
@@ -237,10 +237,10 @@ FROM system.replicas WHERE table = 't';
 | 副本 0 写 1 亿行,副本 1 读 | 1 亿行 |
 | 副本 1 再写 100 万行,副本 0 读 | 1.01 亿行 |
 | 复制状态 | `is_readonly=0`,`queue_size=0`,`active_replicas=2/2` |
-| 1 亿行写入本地 MergeTree | 4.32 秒 |
-| 1.01 亿行 `GROUP BY` + `avg` + `quantile(0.99)` | 三次约 0.09 秒 |
+| 1 亿行写入本地 MergeTree | 0.71 秒 |
+| 1.01 亿行 `GROUP BY` + `avg` + `quantile(0.99)` | 三次约 0.05 秒 |
 
-写入和聚合的耗时是单次粗测(合成数据、本地盘、单节点),只说明功能正常,不能当基准成绩,也不能用来和 x86 对比。同样的写入在另一次测试里是 2.81 秒,可见单次结果波动很大。
+写入和聚合的耗时是单次粗测(合成数据、本地盘、单节点),只说明功能正常,不能当基准成绩,也不能用来和 x86 对比。
 
 ## 7. 生产相关配置
 
@@ -314,7 +314,7 @@ kubectl apply -f manifests/gp3-storageclass.yaml
 | Altinity(0.27.4) | 删除 CHI / CHK 时,operator 把 PVC 一并删除,EBS 卷随之删除 |
 | ClickHouse 官方(v0.0.8) | 删除 `ClickHouseCluster` / `KeeperCluster` 后 PVC 保留,需要手动删除,否则 EBS 卷继续计费 |
 
-这意味着用 Altinity operator 时,误删 CHI 会连数据一起删掉。要在删除 CHI 后保留数据,需要在卷模板里设置 `reclaimPolicy: Retain`;这个设置本次没有测试。上表是在清理一套测试环境(Kubernetes 1.32,StorageClass 的回收策略为 Delete)时观察到的。
+这意味着用 Altinity operator 时,误删 CHI 会连数据一起删掉。要在删除 CHI 后保留数据,需要在卷模板里设置 `reclaimPolicy: Retain`;这个设置本次没有测试。上表是在本文的测试集群上删除集群资源时观察到的,StorageClass 的回收策略是 Delete。
 
 不要把 ClickHouse 数据放在 EFS 上。IO 特别重的场景可以考虑带本地 NVMe 的 Graviton 机型(如 i8g、im4gn),但本地盘在节点替换时数据会丢,需要靠副本恢复;这类机型本次没有测试。
 
@@ -334,7 +334,7 @@ kubectl create namespace clickhouse
 |---|---|
 | Keeper 3 个 pod | 落在 3 台不同节点 |
 | ClickHouse 4 个 pod | 落在 4 台不同节点 |
-| 部署耗时 | Keeper 106 秒,ClickHouse 120 秒 |
+| 部署耗时 | Keeper 112 秒,ClickHouse 120 秒 |
 | 启动日志里 Keeper 相关报错 | 4 个 ClickHouse pod 都是 0 |
 | 分布式表写入 1000 万行 | 两个分片各约 500 万行,每个分片的两个副本行数一致,任意 pod 查分布式表都是 1000 万行 |
 | 删掉 1 个 Keeper pod(完全消失后立即写入) | 写入成功,另一副本同步到数据 |
@@ -343,7 +343,7 @@ kubectl create namespace clickhouse
 **两个限制:**
 
 - **节点数要求**:按主机名做反亲和时,每个 ClickHouse pod 独占一台节点。2 分片 × 2 副本至少要 4 台 arm64 节点,Keeper 至少 3 台(Keeper 可以和 ClickHouse 同机)。
-- **不保证跨可用区**:按主机名的反亲和只保证不同机,不保证不同可用区。本次测试里两个分片的副本碰巧都分在了不同可用区,但 3 个 Keeper 里有 2 个落在同一个可用区(us-east-1a),这个可用区出问题时 Keeper 会失去多数派。要保证跨可用区分散,需要另外加按可用区的调度约束(如 `topologySpreadConstraints`),并保证每个可用区有足够的节点;这一点本次没有验证。
+- **不保证跨可用区**:按主机名的反亲和只保证不同机,不保证不同可用区。同样的清单在同一批节点上部署过两次,结果不一样:一次 3 个 Keeper 正好分在三个可用区,另一次有 2 个落在同一个可用区,那种情况下这个可用区出问题 Keeper 就会失去多数派。要保证跨可用区分散,需要另外加按可用区的调度约束(如 `topologySpreadConstraints`),并保证每个可用区有足够的节点;这一点本次没有验证。
 
 ### 7.3 节点隔离
 
@@ -402,9 +402,9 @@ kubectl apply -f manifests/official-operator-example.yaml
 实测结果:
 
 - cert-manager(v1.21.3)和 operator(v0.0.8)都在 arm64 节点上正常运行。
-- 1 副本 Keeper 加 1 分片 2 副本 ClickHouse 41 秒就绪,数据卷是 gp3。
+- 1 副本 Keeper 加 1 分片 2 副本 ClickHouse 33 秒就绪,数据卷是 gp3。
 - 在 Replicated 数据库里建表、写 100 万行,两个副本行数一致。
-- Keeper 和 ClickHouse 一起 apply 时,两个 ClickHouse pod 分别重启了 1 次和 2 次才起来,原因是启动时 Keeper 还没就绪(`All connection tries failed while connecting to ZooKeeper`)。
+- Keeper 和 ClickHouse 是一起 apply 的。这次 pod 没有重启;此前用同样方式部署时,ClickHouse pod 重启过 1 到 2 次才起来,原因是启动时 Keeper 还没就绪(`All connection tries failed while connecting to ZooKeeper`)。
 - 清单没有设置 `spec.settings.defaultUserPassword`,apply 时会警告 default 用户没有密码。
 
 官方 operator 和 Altinity operator 的 CRD 不同组(`clickhouse.com` 和 `clickhouse.altinity.com`),可以装在同一个集群里,测试中两者同时运行没有冲突。两者都装时,`kubectl get chk` 这个简称会同时匹配两边的 Keeper 资源并给出警告,这时用全名:`kubectl get clickhousekeeperinstallations` 或 `kubectl get keeperclusters`。

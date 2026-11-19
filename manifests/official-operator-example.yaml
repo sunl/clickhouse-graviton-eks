@@ -3,7 +3,7 @@
 # 注意:
 #   - 官方 operator 的 API 还是 v1alpha1,仅建议用于 PoC。
 #   - 没有设置 spec.settings.defaultUserPassword,default 用户无密码,生产必须设置。
-#   - Keeper 和 ClickHouse 一起 apply 时,ClickHouse 会因为连不上 Keeper 重启一两次后恢复。
+#   - Keeper 和 ClickHouse 一起 apply 时,ClickHouse 可能因为连不上 Keeper 重启一两次后恢复。
 apiVersion: clickhouse.com/v1alpha1
 kind: KeeperCluster
 metadata:
@@ -18,7 +18,7 @@ spec:
   containerTemplate:
     image:
       repository: clickhouse/clickhouse-keeper
-      tag: "25.8"
+      tag: "26.10"
   dataVolumeClaimSpec:
     storageClassName: gp3
     accessModes: [ReadWriteOnce]
@@ -43,7 +43,7 @@ spec:
   containerTemplate:
     image:
       repository: clickhouse/clickhouse-server
-      tag: "25.8"
+      tag: "26.10"
     resources:
       requests:
         cpu: "1"

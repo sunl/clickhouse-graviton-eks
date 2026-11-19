@@ -47,7 +47,7 @@ spec:
                       clickhouse-keeper.altinity.com/chk: prod-keeper
           containers:
             - name: clickhouse-keeper
-              image: clickhouse/clickhouse-keeper:25.8
+              image: clickhouse/clickhouse-keeper:26.10
               resources:
                 requests:
                   cpu: "1"
@@ -102,7 +102,7 @@ spec:
                       clickhouse.altinity.com/chi: prod
           containers:
             - name: clickhouse
-              image: clickhouse/clickhouse-server:25.8
+              image: clickhouse/clickhouse-server:26.10
               resources:
                 requests:
                   cpu: "28"
