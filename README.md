@@ -27,7 +27,7 @@ ClickHouse 可以在 EKS 1.37 的 Graviton 节点上部署和运行,以下几项
 | 其他插件 | eks-pod-identity-agent v1.4.1-eksbuild.3 |
 | 客户端工具 | kubectl v1.37.2,helm v3.19.0 |
 
-集群里没有 x86 节点,所有系统组件(CoreDNS、kube-proxy、VPC CNI、GuardDuty agent、EBS CSI、Pod Identity Agent)也都跑在 arm64 上。
+系统组件(CoreDNS、kube-proxy、VPC CNI、GuardDuty agent、EBS CSI、Pod Identity Agent)也都跑在 arm64 节点上。
 
 ## 3. 前置条件
 
@@ -307,6 +307,15 @@ kubectl apply -f manifests/gp3-storageclass.yaml
 
 **关于集群自带的 `gp2` StorageClass:** EKS 集群默认带一个名为 `gp2` 的 StorageClass,`kubectl get sc` 会把它和 `gp3` 一起列出来。本文没有用它,ClickHouse 的卷都不在它上面。它写的是旧的 in-tree provisioner(`kubernetes.io/aws-ebs`),同样要靠 EBS CSI 插件才能建卷。
 
+**删除集群时卷的回收:** 两个 operator 的行为不一样。
+
+| Operator | 删除集群资源后 PVC 和 EBS 卷 |
+|---|---|
+| Altinity(0.27.4) | 删除 CHI / CHK 时,operator 把 PVC 一并删除,EBS 卷随之删除 |
+| ClickHouse 官方(v0.0.8) | 删除 `ClickHouseCluster` / `KeeperCluster` 后 PVC 保留,需要手动删除,否则 EBS 卷继续计费 |
+
+这意味着用 Altinity operator 时,误删 CHI 会连数据一起删掉。要在删除 CHI 后保留数据,需要在卷模板里设置 `reclaimPolicy: Retain`;这个设置本次没有测试。上表是在清理一套测试环境(Kubernetes 1.32,StorageClass 的回收策略为 Delete)时观察到的。
+
 不要把 ClickHouse 数据放在 EFS 上。IO 特别重的场景可以考虑带本地 NVMe 的 Graviton 机型(如 i8g、im4gn),但本地盘在节点替换时数据会丢,需要靠副本恢复;这类机型本次没有测试。
 
 ### 7.2 高可用
@@ -422,15 +431,13 @@ Altinity operator 的 CHI 状态里每次都会记录几条 `Update Service ... 
 - **跨可用区分散**:没有验证按可用区的调度约束。
 - **节点和可用区故障**:只测了删除 pod,没有测节点宕机、可用区不可用、EBS 卷故障。
 - **日常运维**:版本升级、扩缩分片和副本、卷扩容、备份恢复、监控告警都没有测。
-- **资源回收**:删除 CHI / CHK 之后 PVC 和 EBS 卷是否自动删除没有验证。
 - **本地 NVMe 机型**(i8g、im4gn 等)没有测试。
-- **x86 与 arm64 混合部署**不在本文范围内。
 - **第 5.1、7.1、7.3 节的 AWS CLI 命令**:对应操作是通过 API 完成的,CLI 写法没有单独执行。
-- **第 10 节的清理命令**全部没有执行过。
+- **第 10 节第 5 到 8 步的 AWS CLI 命令**没有执行过。
 
 ## 10. 清理
 
-以下命令没有执行过。
+第 1 到 4 步(集群内的资源)在清理一套同样的测试环境时实际执行过,清理后 EC2 侧没有残留的 EBS 卷。第 5 到 8 步(AWS 侧的资源)没有执行过。
 
 ```bash
 # 1. 官方 operator 的集群和 operator
@@ -443,6 +450,7 @@ kubectl delete ns clickhouse-operator-system
 kubectl get crd -o name | grep -E '\.clickhouse\.com$' | xargs kubectl delete
 helm uninstall cert-manager -n cert-manager
 kubectl delete ns cert-manager
+kubectl get crd -o name | grep -E 'cert-manager\.io$' | xargs kubectl delete   # helm uninstall 会保留 CRD
 
 # 2. Altinity 的集群(先删 CHI / CHK,再删 operator)
 kubectl delete -n clickhouse clickhouseinstallations prod
@@ -451,7 +459,7 @@ kubectl delete -n clickhouse-test clickhouseinstallations graviton
 kubectl delete -n clickhouse-test clickhousekeeperinstallations graviton-keeper
 
 # 3. 确认 PVC 都删干净(否则 EBS 卷会留下继续计费)
-kubectl delete pvc --all -n clickhouse
+#    Altinity operator 在第 2 步已经把自己的 PVC 删掉了;官方 operator 的 PVC 在第 1 步手动删除
 kubectl get pvc -A
 
 # 4. Altinity operator 和命名空间
